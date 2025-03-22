@@ -93,20 +93,19 @@ def detect_tempo(
     onset_env = _get_onset_strength(y, sr, hop_length, onset_method)
     
     # Step 2: Calculate the static tempo estimate
-    # Use compatible parameters for librosa.beat.tempo
-    # In older versions, it uses tmin/tmax instead of min_tempo/max_tempo
+    # Try different methods depending on librosa version
+    tempo_static = None
+    
+    # Method 1: Try with librosa.feature.rhythm.tempo (>= 0.10.0)
     try:
-        # Try with tmin/tmax parameters (older librosa versions)
-        tempo_static = librosa.beat.tempo(
+        tempo_static = librosa.feature.rhythm.tempo(
             onset_envelope=onset_env, 
             sr=sr, 
             hop_length=hop_length,
-            start_bpm=start_bpm,
-            tmin=min_tempo/60.0,  # Convert BPM to Hz
-            tmax=max_tempo/60.0   # Convert BPM to Hz
+            start_bpm=start_bpm
         )[0]
-    except TypeError:
-        # If that fails, try without min/max tempo constraints
+    except (AttributeError, ImportError):
+        # Method 2: Try with librosa.beat.tempo (older versions)
         try:
             tempo_static = librosa.beat.tempo(
                 onset_envelope=onset_env, 
@@ -115,17 +114,24 @@ def detect_tempo(
                 start_bpm=start_bpm
             )[0]
         except Exception as e:
-            # If all else fails, estimate tempo using autocorrelation
-            ac_tempo = _estimate_tempo_autocorrelation(
+            # Method 3: Fall back to autocorrelation
+            tempo_static = _estimate_tempo_autocorrelation(
                 onset_env, sr, hop_length, min_tempo, max_tempo
             )
-            tempo_static = ac_tempo[0] if isinstance(ac_tempo, (list, np.ndarray)) else ac_tempo
+    
+    # Ensure tempo_static is a scalar, not an array
+    if isinstance(tempo_static, np.ndarray):
+        tempo_static = float(tempo_static.item())
     
     # Step 3: Get dynamic tempo estimate with beat tracking
     tempo, beats = _get_dynamic_tempo(
         y, sr, onset_env, hop_length, 
         start_bpm=tempo_static
     )
+    
+    # Ensure tempo is a scalar
+    if isinstance(tempo, np.ndarray):
+        tempo = float(tempo.item())
     
     # Ensure tempo is within bounds
     if tempo < min_tempo:
@@ -216,7 +222,7 @@ def _estimate_tempo_autocorrelation(
     # Convert lag to BPM
     tempo = fpm / peak_lag
     
-    return tempo
+    return float(tempo)
 
 def _get_onset_strength(
     y: np.ndarray, 
@@ -324,10 +330,9 @@ def _get_dynamic_tempo(
     np.ndarray
         Beat locations in frames
     """
-    # Use beat tracking to refine tempo estimate
+    # Method 1: Try with librosa.feature.rhythm.beat_track (>= 0.10.0)
     try:
-        # Try with full parameter set
-        tempo, beats = librosa.beat.beat_track(
+        tempo, beats = librosa.feature.rhythm.beat_track(
             onset_envelope=onset_env,
             sr=sr,
             hop_length=hop_length,
@@ -336,14 +341,36 @@ def _get_dynamic_tempo(
             trim=False,
             units='frames'
         )
-    except TypeError:
-        # If that fails, try with minimal parameters
-        tempo, beats = librosa.beat.beat_track(
-            onset_envelope=onset_env,
-            sr=sr,
-            hop_length=hop_length,
-            units='frames'
-        )
+    except (AttributeError, ImportError):
+        # Method 2: Try with librosa.beat.beat_track (older versions)
+        try:
+            tempo, beats = librosa.beat.beat_track(
+                onset_envelope=onset_env,
+                sr=sr,
+                hop_length=hop_length,
+                start_bpm=start_bpm,
+                tightness=100,
+                trim=False,
+                units='frames'
+            )
+        except TypeError:
+            # Method 3: If that fails, try with minimal parameters
+            try:
+                tempo, beats = librosa.beat.beat_track(
+                    onset_envelope=onset_env,
+                    sr=sr,
+                    hop_length=hop_length,
+                    units='frames'
+                )
+            except Exception as e:
+                # Last resort: return the start_bpm and empty beats
+                print(f"Warning: Beat tracking failed, returning default. Error: {e}")
+                tempo = start_bpm
+                beats = np.array([])
+    
+    # Ensure tempo is a scalar
+    if isinstance(tempo, np.ndarray):
+        tempo = float(tempo.item())
     
     return tempo, beats
 
@@ -451,6 +478,10 @@ def _visualize_tempo_detection(
     beats : np.ndarray
         Beat locations in frames
     """
+    # Ensure tempo is a scalar
+    if isinstance(tempo, np.ndarray):
+        tempo = float(tempo.item())
+        
     # Ensure dark mode for consistent styling with other visualizations
     plt.style.use('dark_background')
     
@@ -608,6 +639,10 @@ def analyze_tempo_distribution(
                 max_tempo=max_tempo,
                 visualize=False
             )
+            
+            # Ensure scalar value
+            if isinstance(tempo, np.ndarray):
+                tempo = float(tempo.item())
             
             tempo_values.append(tempo)
             segment_times.append(segment_time)
