@@ -93,22 +93,45 @@ def detect_tempo(
     onset_env = _get_onset_strength(y, sr, hop_length, onset_method)
     
     # Step 2: Calculate the static tempo estimate
-    tempo_static = librosa.beat.tempo(
-        onset_envelope=onset_env, 
-        sr=sr, 
-        hop_length=hop_length,
-        start_bpm=start_bpm,
-        min_tempo=min_tempo,
-        max_tempo=max_tempo
-    )[0]
+    # Use compatible parameters for librosa.beat.tempo
+    # In older versions, it uses tmin/tmax instead of min_tempo/max_tempo
+    try:
+        # Try with tmin/tmax parameters (older librosa versions)
+        tempo_static = librosa.beat.tempo(
+            onset_envelope=onset_env, 
+            sr=sr, 
+            hop_length=hop_length,
+            start_bpm=start_bpm,
+            tmin=min_tempo/60.0,  # Convert BPM to Hz
+            tmax=max_tempo/60.0   # Convert BPM to Hz
+        )[0]
+    except TypeError:
+        # If that fails, try without min/max tempo constraints
+        try:
+            tempo_static = librosa.beat.tempo(
+                onset_envelope=onset_env, 
+                sr=sr, 
+                hop_length=hop_length,
+                start_bpm=start_bpm
+            )[0]
+        except Exception as e:
+            # If all else fails, estimate tempo using autocorrelation
+            ac_tempo = _estimate_tempo_autocorrelation(
+                onset_env, sr, hop_length, min_tempo, max_tempo
+            )
+            tempo_static = ac_tempo[0] if isinstance(ac_tempo, (list, np.ndarray)) else ac_tempo
     
     # Step 3: Get dynamic tempo estimate with beat tracking
     tempo, beats = _get_dynamic_tempo(
         y, sr, onset_env, hop_length, 
-        start_bpm=tempo_static,
-        min_tempo=min_tempo,
-        max_tempo=max_tempo
+        start_bpm=tempo_static
     )
+    
+    # Ensure tempo is within bounds
+    if tempo < min_tempo:
+        tempo *= 2
+    elif tempo > max_tempo:
+        tempo *= 0.5
     
     # Step 4: Calculate onset times
     onset_times = librosa.times_like(onset_env, sr=sr, hop_length=hop_length)
@@ -139,6 +162,61 @@ def detect_tempo(
             'onset_strength': onset_env,
             'onset_times': onset_times
         }
+
+def _estimate_tempo_autocorrelation(
+    onset_env: np.ndarray, 
+    sr: int, 
+    hop_length: int,
+    min_tempo: float = 60.0,
+    max_tempo: float = 240.0
+) -> float:
+    """
+    Estimate tempo using autocorrelation of onset envelope.
+    This is a fallback method when librosa's tempo function isn't working.
+    
+    Parameters
+    ----------
+    onset_env : np.ndarray
+        Onset strength envelope
+    sr : int
+        Sampling rate
+    hop_length : int
+        Number of samples between frames
+    min_tempo : float
+        Minimum tempo in BPM
+    max_tempo : float
+        Maximum tempo in BPM
+        
+    Returns
+    -------
+    float
+        Estimated tempo in BPM
+    """
+    # Calculate frames per second
+    fpm = 60.0 * sr / hop_length
+    
+    # Calculate minimum and maximum lag for the given tempo range
+    min_lag = int(fpm / max_tempo)
+    max_lag = int(fpm / min_tempo)
+    
+    # Make sure we have enough data for the maximum lag
+    if max_lag >= len(onset_env):
+        max_lag = len(onset_env) - 1
+    
+    # Calculate autocorrelation
+    ac = librosa.autocorrelate(onset_env, max_size=max_lag + 1)
+    
+    # Only look at the positive lags
+    ac = ac[min_lag:max_lag + 1]
+    
+    # Find the peak lag
+    peak_idx = np.argmax(ac)
+    peak_lag = min_lag + peak_idx
+    
+    # Convert lag to BPM
+    tempo = fpm / peak_lag
+    
+    return tempo
 
 def _get_onset_strength(
     y: np.ndarray, 
@@ -221,9 +299,7 @@ def _get_dynamic_tempo(
     sr: int, 
     onset_env: np.ndarray, 
     hop_length: int,
-    start_bpm: float = 120.0,
-    min_tempo: float = 60.0,
-    max_tempo: float = 240.0
+    start_bpm: float = 120.0
 ) -> Tuple[float, np.ndarray]:
     """
     Calculate dynamic tempo estimate with beat tracking.
@@ -240,10 +316,6 @@ def _get_dynamic_tempo(
         Number of samples between frames
     start_bpm : float
         Initial tempo estimate in BPM
-    min_tempo : float
-        Minimum tempo to consider in BPM
-    max_tempo : float
-        Maximum tempo to consider in BPM
         
     Returns
     -------
@@ -253,23 +325,26 @@ def _get_dynamic_tempo(
         Beat locations in frames
     """
     # Use beat tracking to refine tempo estimate
-    tempo, beats = librosa.beat.beat_track(
-        onset_envelope=onset_env,
-        sr=sr,
-        hop_length=hop_length,
-        start_bpm=start_bpm,
-        tightness=100,  # Make the beat tracker more rigid
-        trim=False,
-        bpm=None,
-        units='frames'
-    )
+    try:
+        # Try with full parameter set
+        tempo, beats = librosa.beat.beat_track(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=hop_length,
+            start_bpm=start_bpm,
+            tightness=100,  # Make the beat tracker more rigid
+            trim=False,
+            units='frames'
+        )
+    except TypeError:
+        # If that fails, try with minimal parameters
+        tempo, beats = librosa.beat.beat_track(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=hop_length,
+            units='frames'
+        )
     
-    # Ensure tempo is within bounds
-    if tempo < min_tempo:
-        tempo *= 2
-    elif tempo > max_tempo:
-        tempo *= 0.5
-        
     return tempo, beats
 
 def _get_tempo_candidates(
