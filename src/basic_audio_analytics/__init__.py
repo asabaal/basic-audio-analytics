@@ -22,6 +22,13 @@ from basic_audio_analytics.tempo import (
     analyze_tempo_distribution
 )
 
+# Import frequency analysis functions
+from basic_audio_analytics.frequency_analysis import (
+    identify_primary_frequencies,
+    generate_eq_recommendations,
+    analyze_audio_for_fl_studio
+)
+
 __all__ = [
     'plot_waveform',
     'plot_amplitude_distributions',
@@ -39,5 +46,8 @@ __all__ = [
     'plot_overlap_effect',
     'analyze_window_coverage',
     'detect_tempo',
-    'analyze_tempo_distribution'
+    'analyze_tempo_distribution',
+    'identify_primary_frequencies',
+    'generate_eq_recommendations',
+    'analyze_audio_for_fl_studio'
 ]
