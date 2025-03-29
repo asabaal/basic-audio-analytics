@@ -111,11 +111,15 @@ def analyze_frequency_distribution(y, sr):
     
     # Get top 10 peaks
     peak_magnitudes = filtered_spectrum[peaks]
-    sorted_indices = np.argsort(peak_magnitudes)[::-1][:10]  # Get indices of top 10 peaks
-    
-    # Extract the primary frequency values and their magnitudes
-    primary_freqs = filtered_freqs[peaks[sorted_indices]]
-    primary_mags = filtered_spectrum[peaks[sorted_indices]]
+    if len(peak_magnitudes) > 0:
+        sorted_indices = np.argsort(peak_magnitudes)[::-1][:min(10, len(peak_magnitudes))]  # Get indices of top 10 peaks
+        
+        # Extract the primary frequency values and their magnitudes
+        primary_freqs = filtered_freqs[peaks[sorted_indices]]
+        primary_mags = filtered_spectrum[peaks[sorted_indices]]
+    else:
+        primary_freqs = np.array([])
+        primary_mags = np.array([])
     
     return {
         "band_energy": band_energy,
@@ -264,7 +268,7 @@ def analyze_reverb(y, sr):
                         decay_time = -60 / slope
                         if 0.1 < decay_time < 10:  # Reasonable range
                             decay_times.append(decay_time)
-            except:
+            except Exception as e:
                 # Skip errors in regression
                 continue
     
@@ -289,3 +293,319 @@ def analyze_reverb(y, sr):
         "decay_time": median_decay,
         "reverb_level": reverb_level
     }
+
+def plot_comparison_results(y_pre, y_post, sr, 
+                           freq_analysis_pre, freq_analysis_post,
+                           dynamic_range_pre, dynamic_range_post,
+                           stereo_width_pre, stereo_width_post,
+                           harmonic_analysis_pre, harmonic_analysis_post,
+                           reverb_analysis_pre, reverb_analysis_post):
+    """
+    Plot comparison results between pre and post-processed vocals.
+    
+    Parameters:
+    -----------
+    Multiple parameters from the comparison analysis
+    """
+    # Set style for better visualization
+    colors = set_style()
+    
+    # Create figure with multiple subplots
+    fig = plt.figure(figsize=(15, 20))
+    
+    # 1. Waveform Comparison
+    ax1 = plt.subplot(5, 1, 1)
+    librosa.display.waveshow(y_pre, sr=sr, alpha=0.7, color='#00A7E1', ax=ax1, label='Pre-processing')
+    librosa.display.waveshow(y_post, sr=sr, alpha=0.7, color='#FFA400', ax=ax1, label='Post-processing')
+    ax1.set_title('Waveform Comparison', color='white', fontsize=14)
+    ax1.legend(loc='upper right')
+    ax1.set_ylabel('Amplitude', color='white')
+    
+    # Add dynamic range annotation
+    textstr = f'Dynamic Range:\nPre: {dynamic_range_pre:.1f}dB\nPost: {dynamic_range_post:.1f}dB\nChange: {dynamic_range_post-dynamic_range_pre:.1f}dB'
+    props = dict(boxstyle='round', facecolor='#1A1A1A', alpha=0.8, edgecolor='#404040')
+    ax1.text(0.02, 0.97, textstr, transform=ax1.transAxes, fontsize=10,
+            verticalalignment='top', bbox=props, color='white')
+    
+    # 2. Frequency Spectrum Comparison
+    ax2 = plt.subplot(5, 1, 2)
+    ax2.semilogx(freq_analysis_pre["freqs"], freq_analysis_pre["mean_spectrum"], alpha=0.7, color='#00A7E1', label='Pre-processing')
+    ax2.semilogx(freq_analysis_post["freqs"], freq_analysis_post["mean_spectrum"], alpha=0.7, color='#FFA400', label='Post-processing')
+    ax2.set_title('Frequency Spectrum Comparison', color='white', fontsize=14)
+    ax2.set_xlabel('Frequency (Hz)', color='white')
+    ax2.set_ylabel('Magnitude', color='white')
+    ax2.set_xlim(20, 20000)
+    ax2.legend(loc='upper right')
+    ax2.grid(True, linestyle=':', alpha=0.3)
+    
+    # 3. Frequency Band Energy Comparison
+    bands = ["sub_bass", "bass", "low_mids", "mids", "high_mids", "highs", "air"]
+    band_labels = ["Sub Bass\n20-60Hz", "Bass\n60-250Hz", "Low Mids\n250-500Hz", 
+                  "Mids\n500-2kHz", "High Mids\n2-4kHz", "Highs\n4-10kHz", "Air\n10-20kHz"]
+    
+    pre_energies = [freq_analysis_pre["band_energy"].get(band, 0) for band in bands]
+    post_energies = [freq_analysis_post["band_energy"].get(band, 0) for band in bands]
+    
+    ax3 = plt.subplot(5, 1, 3)
+    x = np.arange(len(bands))
+    width = 0.35
+    
+    ax3.bar(x - width/2, pre_energies, width, label='Pre-processing', color='#00A7E1', alpha=0.7)
+    ax3.bar(x + width/2, post_energies, width, label='Post-processing', color='#FFA400', alpha=0.7)
+    
+    ax3.set_title('Frequency Band Energy Comparison', color='white', fontsize=14)
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(band_labels, color='white')
+    ax3.set_ylabel('Relative Energy', color='white')
+    ax3.legend(loc='upper right')
+    
+    # Calculate and annotate dB changes
+    for i, (pre, post) in enumerate(zip(pre_energies, post_energies)):
+        if pre > 0 and post > 0:
+            change_db = 20 * np.log10(post / pre)
+            if abs(change_db) >= 1.0:  # Only show significant changes
+                color = '#00FF00' if change_db > 0 else '#FF6666'
+                ax3.annotate(f"{change_db:.1f}dB", 
+                            xy=(i, max(pre, post) + 0.02),
+                            ha='center', va='bottom',
+                            color=color, fontweight='bold')
+    
+    # 4. Harmonic and Spectral Analysis
+    ax4 = plt.subplot(5, 1, 4)
+    
+    # Create bars for harmonic analysis
+    harmonic_features = ["Harmonic Ratio", "Spectral Centroid/5000", "Flatness*100"]
+    pre_values = [
+        harmonic_analysis_pre["harmonic_ratio"] / 2,
+        harmonic_analysis_pre["spectral_centroid"] / 5000,
+        harmonic_analysis_pre["spectral_flatness"] * 100
+    ]
+    post_values = [
+        harmonic_analysis_post["harmonic_ratio"] / 2,
+        harmonic_analysis_post["spectral_centroid"] / 5000,
+        harmonic_analysis_post["spectral_flatness"] * 100
+    ]
+    
+    x = np.arange(len(harmonic_features))
+    ax4.bar(x - width/2, pre_values, width, label='Pre-processing', color='#00A7E1', alpha=0.7)
+    ax4.bar(x + width/2, post_values, width, label='Post-processing', color='#FFA400', alpha=0.7)
+    
+    ax4.set_title('Harmonic Content Analysis', color='white', fontsize=14)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(harmonic_features, color='white')
+    ax4.set_ylabel('Value (Normalized)', color='white')
+    ax4.legend(loc='upper right')
+    
+    # 5. Reverb Analysis
+    ax5 = plt.subplot(5, 1, 5)
+    
+    # Create bars for reverb analysis
+    reverb_features = ["Decay Time (s)", "Reverb Level"]
+    pre_values = [reverb_analysis_pre["decay_time"], reverb_analysis_pre["reverb_level"]]
+    post_values = [reverb_analysis_post["decay_time"], reverb_analysis_post["reverb_level"]]
+    
+    x = np.arange(len(reverb_features))
+    ax5.bar(x - width/2, pre_values, width, label='Pre-processing', color='#00A7E1', alpha=0.7)
+    ax5.bar(x + width/2, post_values, width, label='Post-processing', color='#FFA400', alpha=0.7)
+    
+    ax5.set_title('Reverb Analysis', color='white', fontsize=14)
+    ax5.set_xticks(x)
+    ax5.set_xticklabels(reverb_features, color='white')
+    ax5.set_ylabel('Value', color='white')
+    ax5.legend(loc='upper right')
+    
+    plt.tight_layout()
+    plt.show()
+
+def compare_vocal_files(pre_file, post_file, plot=True):
+    """
+    Compare pre-processed and post-processed vocal files and provide analysis.
+    
+    Parameters:
+    -----------
+    pre_file : str
+        Path to pre-processed audio file
+    post_file : str
+        Path to post-processed audio file
+    plot : bool
+        Whether to generate comparison plots
+        
+    Returns:
+    --------
+    dict
+        Comparison analysis results
+    """
+    # Load audio files
+    y_pre, sr_pre = librosa.load(pre_file, sr=None)
+    y_post, sr_post = librosa.load(post_file, sr=None)
+    
+    # Ensure same sample rate
+    if sr_pre != sr_post:
+        y_post = librosa.resample(y=y_post, orig_sr=sr_post, target_sr=sr_pre)
+        sr_post = sr_pre
+    
+    # Ensure same length for comparison
+    min_length = min(len(y_pre), len(y_post))
+    y_pre = y_pre[:min_length]
+    y_post = y_post[:min_length]
+    
+    # 1. Dynamic Range Analysis
+    dynamic_range_pre = calculate_dynamic_range(y_pre)
+    dynamic_range_post = calculate_dynamic_range(y_post)
+    
+    # 2. Frequency Distribution Analysis
+    freq_analysis_pre = analyze_frequency_distribution(y_pre, sr_pre)
+    freq_analysis_post = analyze_frequency_distribution(y_post, sr_post)
+    
+    # 3. Stereo Width Analysis
+    stereo_width_pre = analyze_stereo_width(y_pre)
+    stereo_width_post = analyze_stereo_width(y_post)
+    
+    # 4. Harmonic Content Analysis
+    harmonic_analysis_pre = calculate_harmonic_content(y_pre, sr_pre)
+    harmonic_analysis_post = calculate_harmonic_content(y_post, sr_post)
+    
+    # 5. Reverb Analysis
+    reverb_analysis_pre = analyze_reverb(y_pre, sr_pre)
+    reverb_analysis_post = analyze_reverb(y_post, sr_post)
+    
+    # Generate plots if requested
+    if plot:
+        plot_comparison_results(
+            y_pre, y_post, sr_pre,
+            freq_analysis_pre, freq_analysis_post,
+            dynamic_range_pre, dynamic_range_post,
+            stereo_width_pre, stereo_width_post,
+            harmonic_analysis_pre, harmonic_analysis_post,
+            reverb_analysis_pre, reverb_analysis_post
+        )
+    
+    # Calculate frequency band changes
+    band_changes = {}
+    for band, energy_pre in freq_analysis_pre["band_energy"].items():
+        energy_post = freq_analysis_post["band_energy"][band]
+        # Calculate relative change in dB
+        if energy_pre > 0 and energy_post > 0:
+            change_db = 20 * np.log10(energy_post / energy_pre)
+        else:
+            change_db = 0
+        band_changes[band] = change_db
+    
+    # Prepare comparison results
+    comparison = {
+        "dynamic_range": {
+            "pre": dynamic_range_pre,
+            "post": dynamic_range_post,
+            "change": dynamic_range_post - dynamic_range_pre
+        },
+        "frequency_bands": {
+            "pre": freq_analysis_pre["band_energy"],
+            "post": freq_analysis_post["band_energy"],
+            "change_db": band_changes
+        },
+        "stereo_width": {
+            "pre": stereo_width_pre,
+            "post": stereo_width_post,
+            "change": (stereo_width_post - stereo_width_pre) if stereo_width_pre is not None and stereo_width_post is not None else None
+        },
+        "harmonic_content": {
+            "pre": harmonic_analysis_pre,
+            "post": harmonic_analysis_post,
+            "spectral_centroid_change": harmonic_analysis_post["spectral_centroid"] - harmonic_analysis_pre["spectral_centroid"],
+            "harmonic_ratio_change": harmonic_analysis_post["harmonic_ratio"] - harmonic_analysis_pre["harmonic_ratio"]
+        },
+        "reverb": {
+            "pre": reverb_analysis_pre,
+            "post": reverb_analysis_post,
+            "decay_time_change": reverb_analysis_post["decay_time"] - reverb_analysis_pre["decay_time"]
+        }
+    }
+    
+    # Generate textual analysis
+    analysis_text = generate_comparison_text(comparison)
+    comparison["text_analysis"] = analysis_text
+    
+    return comparison
+
+def generate_comparison_text(comparison):
+    """
+    Generate textual analysis from the comparison results.
+    
+    Parameters:
+    -----------
+    comparison : dict
+        Comparison results from compare_vocal_files
+        
+    Returns:
+    --------
+    dict
+        Textual analysis of changes
+    """
+    analysis = {}
+    
+    # Dynamic Range Analysis
+    dr_change = comparison["dynamic_range"]["change"]
+    if abs(dr_change) < 1:
+        analysis["dynamic_range"] = "Dynamic range remains largely unchanged"
+    elif dr_change < 0:
+        decrease_percent = abs(dr_change) / comparison["dynamic_range"]["pre"] * 100 if comparison["dynamic_range"]["pre"] > 0 else 0
+        analysis["dynamic_range"] = f"Dynamic range reduced by {abs(dr_change):.1f}dB ({decrease_percent:.1f}%) due to compression"
+    else:
+        increase_percent = dr_change / comparison["dynamic_range"]["pre"] * 100 if comparison["dynamic_range"]["pre"] > 0 else 0
+        analysis["dynamic_range"] = f"Dynamic range increased by {dr_change:.1f}dB ({increase_percent:.1f}%), unusual for vocal processing"
+    
+    # Frequency Analysis
+    freq_changes = []
+    for band, change_db in comparison["frequency_bands"]["change_db"].items():
+        if abs(change_db) >= 1.0:  # Only significant changes
+            direction = "boosted" if change_db > 0 else "reduced"
+            freq_changes.append(f"{band.replace('_', ' ')} {direction} by {abs(change_db):.1f}dB")
+    
+    if freq_changes:
+        analysis["frequency_balance"] = "Frequency balance changes: " + "; ".join(freq_changes)
+    else:
+        analysis["frequency_balance"] = "Minimal changes to frequency balance"
+    
+    # Stereo Width Analysis
+    if comparison["stereo_width"]["pre"] is not None and comparison["stereo_width"]["post"] is not None:
+        width_change = comparison["stereo_width"]["change"]
+        if abs(width_change) < 0.05:
+            analysis["stereo_width"] = "Stereo width remains largely unchanged"
+        elif width_change > 0:
+            analysis["stereo_width"] = f"Stereo width increased by {width_change*100:.1f}%, likely due to reverb or stereo effects"
+        else:
+            analysis["stereo_width"] = f"Stereo width decreased by {abs(width_change)*100:.1f}%"
+    else:
+        analysis["stereo_width"] = "Stereo analysis not applicable (mono files)"
+    
+    # Harmonic Content Analysis
+    harmonic_ratio_change = comparison["harmonic_content"]["harmonic_ratio_change"]
+    centroid_change = comparison["harmonic_content"]["spectral_centroid_change"]
+    
+    if abs(harmonic_ratio_change) > 0.1 or abs(centroid_change) > 200:
+        if harmonic_ratio_change > 0.1:
+            analysis["harmonic_content"] = "Increased harmonic content, likely due to saturation/distortion"
+        elif harmonic_ratio_change < -0.1:
+            analysis["harmonic_content"] = "Reduced harmonic content, possibly due to filtering"
+        
+        if centroid_change > 200:
+            analysis["spectral_balance"] = "Brighter sound (increased high frequencies)"
+        elif centroid_change < -200:
+            analysis["spectral_balance"] = "Warmer sound (reduced high frequencies)"
+        else:
+            analysis["spectral_balance"] = "Minimal change in overall brightness"
+    else:
+        analysis["harmonic_content"] = "Harmonic content relatively unchanged"
+        analysis["spectral_balance"] = "No significant change in spectral balance"
+    
+    # Reverb Analysis
+    decay_change = comparison["reverb"]["decay_time_change"]
+    
+    if comparison["reverb"]["post"]["decay_time"] > 0.5 and comparison["reverb"]["pre"]["decay_time"] < 0.2:
+        analysis["reverb"] = f"Reverb added with approximately {comparison['reverb']['post']['decay_time']:.2f}s decay time"
+    elif decay_change > 0.1:
+        analysis["reverb"] = f"Reverb increased by {decay_change:.2f}s decay time"
+    else:
+        analysis["reverb"] = "No significant reverb changes detected"
+    
+    return analysis
